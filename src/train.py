@@ -70,21 +70,23 @@ class ProjectAgent:
 
         state_dim = env.observation_space.shape[0]
         n_action = env.action_space.n # .n returns the number of possible actions
-        nb_neurons=300 
+        nb_neurons=515 
 
         DQN = torch.nn.Sequential(
             nn.Linear(state_dim, nb_neurons),
-           # nn.BatchNorm1d(nb_neurons),  # Batch Normalization layer after the input layer
-            nn.LeakyReLU(),
+            nn.SiLU(),
+           # nn.Dropout(p=0.2),  # Dropout layer for regularization
             nn.Linear(nb_neurons, nb_neurons),
-           # nn.BatchNorm1d(nb_neurons),  # Batch Normalization layer after the first hidden layer
-            nn.LeakyReLU(),
+            nn.SiLU(),
+           # nn.Dropout(p=0.2),  # Another dropout layer
             nn.Linear(nb_neurons, nb_neurons),
-           # nn.BatchNorm1d(nb_neurons),  # Batch Normalization layer after the second hidden layer
-            nn.LeakyReLU(),
+            nn.SiLU(),
+           # nn.Dropout(p=0.2),  # And another dropout layer
             nn.Linear(nb_neurons, nb_neurons),
-           # nn.BatchNorm1d(nb_neurons),  # Batch Normalization layer after the third hidden layer
-            nn.LeakyReLU(),
+            nn.SiLU(),
+            nn.Linear(nb_neurons, nb_neurons),
+            nn.SiLU(),
+           # nn.Dropout(p=0.2),  # Final dropout layer before the output
             nn.Linear(nb_neurons, n_action)
             ).to(device)
 
@@ -94,17 +96,17 @@ class ProjectAgent:
 
         config = {'nb_actions': env.action_space.n,
                 'learning_rate': 0.001,
-                'gamma': 0.95, #seems OK
-                'buffer_size': 100000,
+                'gamma': 0.98, #seems OK
+                'buffer_size': 1000000,
                 'epsilon_min': 0.01,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 17000, 
-                'epsilon_delay_decay': 500,
-                'batch_size': 500,
-                'gradient_steps': 4,
-                'update_target_strategy': 'replace', #we always use hard update (replace, less complex). Modify below for EMA
-                'update_target_freq': 400,
-                'update_target_tau': 0.005,
+                'epsilon_decay_period': 10000, 
+                'epsilon_delay_decay': 410,
+                'batch_size': 1000,
+                'gradient_steps': 2,
+                'update_target_strategy': 'ema', #we always use hard update (replace). I've tried ema but it is worse.
+                'update_target_freq': 600,
+                'update_target_tau': 0.001,
                 'criterion': torch.nn.SmoothL1Loss()}
 
         device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -135,11 +137,12 @@ class ProjectAgent:
 
         # Target network
         update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
-
+        update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
+        update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
 
         previous_val = 0
 
-        max_episode = 250 
+        max_episode = 350
 
         episode_return = []
         episode = 0
@@ -163,8 +166,12 @@ class ProjectAgent:
 
             for _ in range(nb_gradient_steps): 
                 self.gradient_step()
-            if step % update_target_freq == 0: 
-                self.target_model.load_state_dict(self.model.state_dict())
+            target_state_dict = self.target_model.state_dict()
+            model_state_dict = self.model.state_dict()
+            tau = update_target_tau
+            for key in model_state_dict:
+                target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
+            self.target_model.load_state_dict(target_state_dict)
 
             step += 1
             if done or trunc:
