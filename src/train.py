@@ -13,9 +13,8 @@ from env_hiv import HIVPatient
 from evaluate import evaluate_HIV, evaluate_HIV_population
 
 
-
 env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
+    env=HIVPatient(domain_randomization=True), max_episode_steps=200
 )  # The time wrapper limits the number of steps in an episode at 200.
 # Now is the floor is yours to implement the agent and train it.
 
@@ -24,6 +23,7 @@ env = TimeLimit(
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
 
+###############################################################################
 # We implement a DQN
 
 class ProjectAgent:
@@ -65,28 +65,29 @@ class ProjectAgent:
             loss.backward()
             self.optimizer.step() 
 
-    # DQN (ideas for later: double DQN? more layers?)
+    # DQN (ideas for later: double DQN? more layers? test dropout)
     def myDQN(self, config, device):
 
         state_dim = env.observation_space.shape[0]
         n_action = env.action_space.n # .n returns the number of possible actions
-        nb_neurons=515 
+        nb_neurons=256 
 
         DQN = torch.nn.Sequential(
             nn.Linear(state_dim, nb_neurons),
-            nn.SiLU(),
-           # nn.Dropout(p=0.2),  # Dropout layer for regularization
+            #nn.SiLU(), ReLU seems to work better
+            nn.ReLU(),
             nn.Linear(nb_neurons, nb_neurons),
-            nn.SiLU(),
-           # nn.Dropout(p=0.2),  # Another dropout layer
+            #nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(nb_neurons, nb_neurons),
-            nn.SiLU(),
-           # nn.Dropout(p=0.2),  # And another dropout layer
+            #nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(nb_neurons, nb_neurons),
-            nn.SiLU(),
+            #nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(nb_neurons, nb_neurons),
-            nn.SiLU(),
-           # nn.Dropout(p=0.2),  # Final dropout layer before the output
+            #nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(nb_neurons, n_action)
             ).to(device)
 
@@ -96,17 +97,17 @@ class ProjectAgent:
 
         config = {'nb_actions': env.action_space.n,
                 'learning_rate': 0.001,
-                'gamma': 0.98, #seems OK
-                'buffer_size': 1000000,
-                'epsilon_min': 0.01,
+                'gamma': 0.97, #seems OK
+                'buffer_size': 100000,
+                'epsilon_min': 0.02,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 10000, 
-                'epsilon_delay_decay': 410,
-                'batch_size': 1000,
-                'gradient_steps': 2,
-                'update_target_strategy': 'ema', #we always use hard update (replace). I've tried ema but it is worse.
-                'update_target_freq': 600,
-                'update_target_tau': 0.001,
+                'epsilon_decay_period': 19000, 
+                'epsilon_delay_decay': 100,
+                'batch_size': 750,
+                'gradient_steps': 3,
+                'update_target_strategy': 'replace', # tried ema but works worse for this model/problem
+                'update_target_freq': 390,
+                'update_target_tau': 0.005,
                 'criterion': torch.nn.SmoothL1Loss()}
 
         device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -142,7 +143,7 @@ class ProjectAgent:
 
         previous_val = 0
 
-        max_episode = 350
+        max_episode = 250 #MODIFY HERE FOR TRAINING
 
         episode_return = []
         episode = 0
@@ -166,12 +167,8 @@ class ProjectAgent:
 
             for _ in range(nb_gradient_steps): 
                 self.gradient_step()
-            target_state_dict = self.target_model.state_dict()
-            model_state_dict = self.model.state_dict()
-            tau = update_target_tau
-            for key in model_state_dict:
-                target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
-            self.target_model.load_state_dict(target_state_dict)
+            if step % update_target_freq == 0: 
+                self.target_model.load_state_dict(self.model.state_dict())
 
             step += 1
             if done or trunc:
@@ -202,6 +199,7 @@ class ProjectAgent:
         self.save(path)
         return episode_return
 
+###############################################################################
 # We create a replay buffer (replay_buffer2 given in class):
 class ReplayBuffer:
     def __init__(self, capacity, device):
