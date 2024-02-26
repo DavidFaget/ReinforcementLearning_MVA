@@ -70,8 +70,9 @@ class ProjectAgent:
 
         state_dim = env.observation_space.shape[0]
         n_action = env.action_space.n # .n returns the number of possible actions
-        nb_neurons=256 
+        nb_neurons=256 # Power of 2 works better
 
+      # Possible to define it as usual (as a class, not sequential)
         DQN = torch.nn.Sequential(
             nn.Linear(state_dim, nb_neurons),
             #nn.SiLU(), ReLU seems to work better
@@ -93,23 +94,24 @@ class ProjectAgent:
 
         return DQN
 
-    def train(self): 
+    def train(self):
 
         config = {'nb_actions': env.action_space.n,
                 'learning_rate': 0.001,
-                'gamma': 0.97, #seems OK
+                'gamma': 0.98,
                 'buffer_size': 100000,
                 'epsilon_min': 0.02,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 19000, 
+                'epsilon_decay_period': 21000, 
                 'epsilon_delay_decay': 100,
-                'batch_size': 750,
+                'batch_size': 790,
                 'gradient_steps': 3,
-                'update_target_strategy': 'replace', # tried ema but works worse for this model/problem
-                'update_target_freq': 390,
+                'update_target_strategy': 'replace', # or 'ema' (tried but replace seems to work better for this model/problem)
+                'update_target_freq': 400,
                 'update_target_tau': 0.005,
                 'criterion': torch.nn.SmoothL1Loss()}
 
+        # network
         device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using device:', device)
         self.model = self.myDQN(config, device)
@@ -119,31 +121,34 @@ class ProjectAgent:
         self.batch_size = config['batch_size']
         self.nb_actions = config['nb_actions']
 
-        # eps-greedy 
+        # epsilon greedy strategy
         epsilon_max = config['epsilon_max']
         epsilon_min = config['epsilon_min']
         epsilon_stop = config['epsilon_decay_period'] if 'epsilon_decay_period' in config.keys() else 1000
         epsilon_delay = config['epsilon_delay_decay'] if 'epsilon_delay_decay' in config.keys() else 20
         epsilon_step = (epsilon_max-epsilon_min)/epsilon_stop
 
+        # memory buffer
         self.memory = ReplayBuffer(config['buffer_size'], device)
 
-        # Parameters
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
         lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
         
         self.optimizer = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
-        
+        self.optimizer2 = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
+        #self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=88, gamma=0.1)
+
         nb_gradient_steps = config['gradient_steps'] if 'gradient_steps' in config.keys() else 1
 
-        # Target network
-        update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
+        # target network
+        update_target_strategy = config['update_target_strategy'] if 'update_target_strategy' in config.keys() else 'replace'
         update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
         update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
 
+
         previous_val = 0
 
-        max_episode = 250 #MODIFY HERE FOR TRAINING
+        max_episode = 350 
 
         episode_return = []
         episode = 0
@@ -152,43 +157,55 @@ class ProjectAgent:
         epsilon = epsilon_max
         step = 0
 
-        # Training loop
+        ## TRAIN NETWORK
+
         while episode < max_episode:
+            # update epsilon
             if step > epsilon_delay:
                 epsilon = max(epsilon_min, epsilon-epsilon_step)
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
                 action = self.act_greedy(self.model, state)
-            # env.step()
+            # step
             next_state, reward, done, trunc, _ = env.step(action)
             self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += reward
-
+            # train
             for _ in range(nb_gradient_steps): 
                 self.gradient_step()
-            if step % update_target_freq == 0: 
-                self.target_model.load_state_dict(self.model.state_dict())
 
+            if update_target_strategy == 'replace': 
+                if step % update_target_freq == 0: 
+                    self.target_model.load_state_dict(self.model.state_dict())
+            if update_target_strategy == 'ema':
+                target_state_dict = self.target_model.state_dict()
+                model_state_dict = self.model.state_dict()
+                tau = update_target_tau
+                for key in model_state_dict:
+                    target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
+                self.target_model.load_state_dict(target_state_dict)
+            # next transition
             step += 1
             if done or trunc:
                 episode += 1
-                if episode > 0:
-                    validation_score = evaluate_HIV(agent=self, nb_episode=1)
-                else :
-                    validation_score = 0
-                    
-                print(f"Episode: {episode:3d} | "
-                      f"Epsilon: {epsilon:6.2f} | "
-                      f"Batch Size: {len(self.memory):5d} | "
-                      f"Episode Return: {episode_cum_reward:.2e} | "
-                      f"Validation Score: {validation_score:.2e}")
-
+                
+                validation_score = evaluate_HIV(agent=self, nb_episode=1)
+                                
+                print(f"Episode {episode:3d} | "
+                      f"Epsilon {epsilon:6.2f} | "
+                      f"Batch Size {len(self.memory):5d} | "
+                      f"Episode Return {episode_cum_reward:.2e} | "
+                      f"Evaluation Score {validation_score:.2e}")
                 state, _ = env.reset()
-                if validation_score >= previous_val:
-                   previous_val = validation_score
-                   self.best_model = deepcopy(self.model).to(device)
-                episode_return.append(episode_cum_reward)                
+
+                if validation_score > previous_val:
+                    previous_val = validation_score
+                    self.best_model = deepcopy(self.model).to(device)
+                    path = os.getcwd()
+                    self.save(path)
+                episode_return.append(episode_cum_reward)
+                
                 episode_cum_reward = 0
             else:
                 state = next_state
