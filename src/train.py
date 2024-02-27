@@ -111,7 +111,7 @@ class ProjectAgent:
                 'update_target_tau': 0.005,
                 'criterion': torch.nn.SmoothL1Loss()}
 
-        # network
+    
         device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using device:', device)
         self.model = self.myDQN(config, device)
@@ -167,11 +167,11 @@ class ProjectAgent:
                 action = env.action_space.sample()
             else:
                 action = self.act_greedy(self.model, state)
-            # step
+            
             next_state, reward, done, trunc, _ = env.step(action)
             self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += reward
-            # train
+            
             for _ in range(nb_gradient_steps): 
                 self.gradient_step()
 
@@ -185,7 +185,7 @@ class ProjectAgent:
                 for key in model_state_dict:
                     target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
                 self.target_model.load_state_dict(target_state_dict)
-            # next transition
+            
             step += 1
             if done or trunc:
                 episode += 1
@@ -209,7 +209,6 @@ class ProjectAgent:
                 episode_cum_reward = 0
             else:
                 state = next_state
-
 
         self.model.load_state_dict(self.best_model.state_dict())
         path = os.getcwd()
